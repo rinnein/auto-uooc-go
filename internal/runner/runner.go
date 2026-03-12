@@ -212,14 +212,20 @@ func (r *Runner) handleTask(ctx context.Context, task videoTask) taskResult {
 
 	tailRetries := 0
 	pos := 0.0
+	firstReport := true
 	progressStep := r.opts.ReportInterval.Seconds() * r.opts.SpeedMultiplier
 	if progressStep <= 0 {
 		progressStep = defaultReportInterval.Seconds() * defaultSpeedMultiplier
 	}
 	for {
-		nextPos := pos + progressStep
-		if nextPos > duration-1 {
-			nextPos = duration - 1
+		nextPos := 0.0
+		if firstReport {
+			firstReport = false
+		} else {
+			nextPos = pos + progressStep
+			if nextPos > duration-1 {
+				nextPos = duration - 1
+			}
 		}
 
 		if r.opts.DryRun {
