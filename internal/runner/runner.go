@@ -90,25 +90,59 @@ func (r *Runner) RunCourse(ctx context.Context, cid int64) error {
 	}
 	fmt.Printf("current video progress: %s\n", progress.VideoProgress)
 
-	catalog, err := r.client.GetCatalogList(ctx, cid)
-	if err != nil {
-		return fmt.Errorf("get catalog list: %w", err)
-	}
-	discovery := r.discoverVideoTasks(ctx, cid, catalog)
-	if len(discovery.Tasks) == 0 {
-		fmt.Println("no video tasks found")
+	processed := make(map[int64]struct{})
+	var allResults []taskResult
+	everGateLocked := false
+	round := 1
+
+	for {
+		catalog, err := r.client.GetCatalogList(ctx, cid)
+		if err != nil {
+			return fmt.Errorf("get catalog list: %w", err)
+		}
+		discovery := r.discoverVideoTasks(ctx, cid, catalog)
 		if discovery.GateLocked {
-			fmt.Println("course has gate-locked sections (code=600)")
+			everGateLocked = true
+		}
+
+		pending := filterUnprocessedTasks(discovery.Tasks, processed)
+		if len(pending) == 0 {
+			fmt.Printf("round %d: no new video tasks found, stop\n", round)
+			break
+		}
+
+		fmt.Printf("round %d: discovered %d new video tasks\n", round, len(pending))
+		results := r.processTasks(ctx, pending)
+		allResults = append(allResults, results...)
+
+		for _, t := range pending {
+			processed[t.ResourceID] = struct{}{}
+		}
+
+		fmt.Printf("round %d completed, re-checking for newly unlocked videos...\n", round)
+		round++
+	}
+
+	if len(allResults) == 0 {
+		fmt.Println("no video tasks found")
+		if everGateLocked {
+			fmt.Println("course has gate-locked sections (code=600), and no new videos unlocked yet")
 		}
 		return nil
 	}
-	fmt.Printf("found %d video tasks\n", len(discovery.Tasks))
-	if discovery.GateLocked {
-		fmt.Println("[Note] Course has gate-locked sections, stopping discovery here")
-	}
 
-	results := r.processTasks(ctx, discovery.Tasks)
-	return summarize(results, discovery.GateLocked)
+	return summarize(allResults, everGateLocked)
+}
+
+func filterUnprocessedTasks(tasks []videoTask, processed map[int64]struct{}) []videoTask {
+	out := make([]videoTask, 0, len(tasks))
+	for _, t := range tasks {
+		if _, ok := processed[t.ResourceID]; ok {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 func (r *Runner) discoverVideoTasks(ctx context.Context, cid int64, catalog []api.CatalogNode) discoveryResult {
