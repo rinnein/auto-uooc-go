@@ -46,6 +46,7 @@ type videoTask struct {
 	ResourceID int64
 	Title      string
 	SourceURL  string
+	StartPos   float64
 }
 
 type taskResult struct {
@@ -173,6 +174,10 @@ func (r *Runner) discoverVideoTasks(ctx context.Context, cid int64, catalog []ap
 					fmt.Printf("skip done task: [%d] %s (finished=%d)\n", item.ID, item.Title, item.Finished)
 					continue
 				}
+				startPos := 0.0
+				if float64(item.VideoPos) > 0 {
+					startPos = float64(item.VideoPos) + 1
+				}
 				tasks = append(tasks, videoTask{
 					CID:        cid,
 					ChapterID:  chapter.ID,
@@ -180,6 +185,7 @@ func (r *Runner) discoverVideoTasks(ctx context.Context, cid int64, catalog []ap
 					ResourceID: item.ID,
 					Title:      item.Title,
 					SourceURL:  source,
+					StartPos:   startPos,
 				})
 			}
 		}
@@ -245,26 +251,33 @@ func (r *Runner) handleTask(ctx context.Context, task videoTask) taskResult {
 	}
 
 	tailRetries := 0
-	pos := 0.0
+	pos := task.StartPos
 	firstReport := true
-	progressStep := r.opts.ReportInterval.Seconds() * r.opts.SpeedMultiplier
-	if progressStep <= 0 {
-		progressStep = defaultReportInterval.Seconds() * defaultSpeedMultiplier
+	targetMultiplier := r.opts.SpeedMultiplier
+	if targetMultiplier <= 0 {
+		targetMultiplier = defaultSpeedMultiplier
 	}
+	requestCount := 0
 	for {
-		nextPos := 0.0
+		requestCount++
+		nextPos := pos
 		if firstReport {
 			firstReport = false
 		} else {
-			nextPos = pos + progressStep
-			if nextPos > duration-1 {
-				nextPos = duration - 1
+			currentMultiplier := requestMultiplierByCount(requestCount, targetMultiplier)
+			progressStep := r.opts.ReportInterval.Seconds() * currentMultiplier
+			if progressStep <= 0 {
+				progressStep = defaultReportInterval.Seconds() * defaultSpeedMultiplier
 			}
+			nextPos = pos + progressStep
 		}
 
-		if r.opts.DryRun {
-			fmt.Printf("dry-run task [%d]: chapter=%d section=%d video_length=%.2f video_pos=%.2f\n", task.ResourceID, task.ChapterID, task.SectionID, duration, nextPos)
-		} else {
+		if nextPos > duration-1 {
+			nextPos = duration - 1
+		}
+
+		fmt.Printf("dry-run task [%d]: chapter=%d section=%d video_length=%.2f video_pos=%.2f\n", task.ResourceID, task.ChapterID, task.SectionID, duration, nextPos)
+		if !r.opts.DryRun {
 			resp, err := r.client.MarkVideoLearn(ctx, api.MarkVideoRequest{
 				ChapterID:   task.ChapterID,
 				CID:         task.CID,
@@ -302,6 +315,29 @@ func (r *Runner) handleTask(ctx context.Context, task videoTask) taskResult {
 		pos = nextPos
 		time.Sleep(r.opts.ReportInterval)
 	}
+}
+
+func requestMultiplierByCount(requestCount int, target float64) float64 {
+	if target <= 0 {
+		target = defaultSpeedMultiplier
+	}
+
+	base := target
+	switch requestCount {
+	case 1:
+		base = 1.0
+	case 2:
+		base = 1.5
+	case 3:
+		base = 2.0
+	default:
+		base = target
+	}
+
+	if base > target {
+		return target
+	}
+	return base
 }
 
 func summarize(results []taskResult, gateLocked bool) error {

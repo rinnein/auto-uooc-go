@@ -54,8 +54,36 @@ type UnitItem struct {
 	ID            int64                  `json:"id"`
 	Title         string                 `json:"title"`
 	Finished      int                    `json:"finished"`
+	VideoPos      FlexibleFloat          `json:"video_pos"`
 	VideoURL      map[string]VideoSource `json:"video_url"`
 	VideoPlayList []VideoSource          `json:"video_play_list"`
+}
+
+type FlexibleFloat float64
+
+func (f *FlexibleFloat) UnmarshalJSON(data []byte) error {
+	if json.Number(data) == "0" {
+		*f = 0
+		return nil
+	}
+	s := strings.TrimSpace(string(data))
+
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return fmt.Errorf("video_pos must be string or null")
+	}
+
+	s = s[1 : len(s)-1]
+	if strings.TrimSpace(s) == "" {
+		*f = 0
+		return nil
+	}
+
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("invalid float value %q: %w", s, err)
+	}
+	*f = FlexibleFloat(v)
+	return nil
 }
 
 type VideoSource struct {
